@@ -95,7 +95,7 @@ func env(key, fallback string) string {
 }
 
 func buildDashboard(handlers []handlerInfo) map[string]any {
-	panels := make([]map[string]any, 0, 4+len(handlers)*2)
+	panels := make([]map[string]any, 0, 4+len(handlers)*3)
 	filters := `datacenter=~"$datacenter",pod_id=~"$pod_id"`
 	panels = append(panels,
 		statPanel(1, "Requests / second", 0, 0, "reqps", fmt.Sprintf(`sum(rate(http_server_requests_total{%s}[$__rate_interval]))`, filters)),
@@ -107,12 +107,13 @@ func buildDashboard(handlers []handlerInfo) map[string]any {
 		handlerID := handler.Method + " " + handler.Path
 		selector := handlerSelector(handlerID)
 		groupY := 13 + handlerIndex*8
-		firstPanelID := handlerIndex*2 + 5
+		firstPanelID := handlerIndex*3 + 5
 		panels = append(panels,
 			panel(firstPanelID, "Latency — "+handlerID, 0, groupY, "s", latencyTargets(selector)),
-			panel(firstPanelID+1, "Requests / second — "+handlerID, 12, groupY, "reqps", []map[string]any{
+			panel(firstPanelID+1, "Requests / second — "+handlerID, 8, groupY, "reqps", []map[string]any{
 				queryTarget("A", requestRateQuery(selector), "requests/sec"),
 			}),
+			errorPanel(firstPanelID+2, "Errors — "+handlerID, 16, groupY, selector),
 		)
 	}
 
@@ -156,7 +157,7 @@ func panel(id int, title string, x, y int, unit string, targets []map[string]any
 		"title":       title,
 		"type":        "timeseries",
 		"datasource":  prometheusDatasource(),
-		"gridPos":     map[string]int{"h": 8, "w": 12, "x": x, "y": y},
+		"gridPos":     map[string]int{"h": 8, "w": 8, "x": x, "y": y},
 		"targets":     targets,
 		"fieldConfig": map[string]any{"defaults": map[string]any{"unit": unit, "color": map[string]any{"mode": "palette-classic"}}, "overrides": []any{}},
 		"options":     map[string]any{"legend": map[string]any{"displayMode": "list", "placement": "bottom"}, "tooltip": map[string]any{"mode": "multi"}},
@@ -183,6 +184,15 @@ func errorTablePanel(id, x, y int, filters string) map[string]any {
 		"fieldConfig": map[string]any{"defaults": map[string]any{"unit": "short"}, "overrides": []any{}},
 		"options":     map[string]any{"showHeader": true, "cellHeight": "sm"},
 	}
+}
+
+func errorPanel(id int, title string, x, y int, selector string) map[string]any {
+	query := fmt.Sprintf(`sum by (status_code) (increase(http_server_requests_total{%s,status_code=~"4..|5.."}[$__rate_interval]))`, selector)
+	result := panel(id, title, x, y, "short", []map[string]any{
+		queryTarget("A", query, "{{status_code}}"),
+	})
+	result["description"] = "Количество ответов 4xx и 5xx по коду. Если ошибок не было, график будет пустым."
+	return result
 }
 
 func prometheusDatasource() map[string]string {
