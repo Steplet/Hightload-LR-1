@@ -2,8 +2,10 @@ package main
 
 import (
 	"log"
+	"math"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -18,14 +20,32 @@ func main() {
 	if podID == "" || datacenter == "" {
 		log.Fatal("POD_ID and DATACENTER environment variables are required")
 	}
+	failureProbability, err := strconv.ParseFloat(env("INJECT_500_PROBABILITY", "0"), 64)
+	if err != nil || math.IsNaN(failureProbability) || failureProbability < 0 || failureProbability > 1 {
+		log.Fatal("INJECT_500_PROBABILITY must be a number between 0 and 1")
+	}
 
-	routes := itemRoutes(NewStore())
+	routes := itemRoutes(NewStore(), failureProbability)
 	metrics := NewMetrics(podID, datacenter, routes)
 	server := newRouter(routes, metrics)
 
-	addr := ":8080"
-	log.Printf("listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, server))
+	httpServer := &http.Server{
+		Addr:              ":8080",
+		Handler:           server,
+		ReadTimeout:       10 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	log.Printf("listening on %s", httpServer.Addr)
+	log.Fatal(httpServer.ListenAndServe())
+}
+
+func env(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
 }
 
 func checkHealth() int {

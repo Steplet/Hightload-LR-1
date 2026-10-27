@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
+	"math/rand"
 	"net/http"
 	"sync"
 
@@ -19,6 +21,8 @@ type itemInput struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`
 }
+
+const maxItemBodyBytes = 1 << 20
 
 type Store struct {
 	mu    sync.RWMutex
@@ -65,19 +69,19 @@ func newID() (string, error) {
 	return id.String(), nil
 }
 
-func itemRoutes(store *Store) []route {
+func itemRoutes(store *Store, failureProbability float64) []route {
 	return []route{
 		{handlerInfo{"POST", "/items"}, createItemHandler(store)},
 		{handlerInfo{"GET", "/items/{id}"}, getItemHandler(store)},
-		{handlerInfo{"PUT", "/items/{id}"}, updateItemHandler(store)},
+		{handlerInfo{"PUT", "/items/{id}"}, updateItemHandler(store, failureProbability)},
 	}
 }
 
 func createItemHandler(store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var input itemInput
-		if err := decodeItem(r, &input); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid JSON body")
+		input, err := decodeItem(w, r)
+		if err != nil {
+			writeItemDecodeError(w, err)
 			return
 		}
 		created, err := store.create(Item{Name: input.Name, Value: input.Value})
@@ -100,11 +104,15 @@ func getItemHandler(store *Store) http.HandlerFunc {
 	}
 }
 
-func updateItemHandler(store *Store) http.HandlerFunc {
+func updateItemHandler(store *Store, failureProbability float64) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var input itemInput
-		if err := decodeItem(r, &input); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid JSON body")
+		if rand.Float64() < failureProbability {
+			writeError(w, http.StatusInternalServerError, "simulated server failure")
+			return
+		}
+		input, err := decodeItem(w, r)
+		if err != nil {
+			writeItemDecodeError(w, err)
 			return
 		}
 		updated, ok := store.update(r.PathValue("id"), Item{Name: input.Name, Value: input.Value})
@@ -116,21 +124,35 @@ func updateItemHandler(store *Store) http.HandlerFunc {
 	}
 }
 
-func decodeItem(r *http.Request, item any) error {
+func decodeItem(w http.ResponseWriter, r *http.Request) (itemInput, error) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxItemBodyBytes)
 	defer r.Body.Close()
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(item); err != nil {
-		return err
+	var item *itemInput
+	if err := decoder.Decode(&item); err != nil {
+		return itemInput{}, err
+	}
+	if item == nil {
+		return itemInput{}, errors.New("JSON object required")
 	}
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
 		if err == nil {
-			return io.ErrUnexpectedEOF
+			return itemInput{}, errors.New("multiple JSON values")
 		}
-		return err
+		return itemInput{}, err
 	}
-	return nil
+	return *item, nil
+}
+
+func writeItemDecodeError(w http.ResponseWriter, err error) {
+	var maxBytesError *http.MaxBytesError
+	if errors.As(err, &maxBytesError) {
+		writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+		return
+	}
+	writeError(w, http.StatusBadRequest, "invalid JSON body")
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

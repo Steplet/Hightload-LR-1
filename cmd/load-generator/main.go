@@ -158,7 +158,7 @@ func sendRequest(client *http.Client, target *target, sequence uint64, forceNotF
 		return nil
 	}
 	_, _ = io.Copy(io.Discard, response.Body)
-	if response.StatusCode >= 500 {
+	if response.StatusCode >= 500 && method == http.MethodPut {
 		return nil // Expected injected server errors are part of this workload.
 	}
 	if response.StatusCode >= 400 && !(forceNotFound && response.StatusCode == http.StatusNotFound) {

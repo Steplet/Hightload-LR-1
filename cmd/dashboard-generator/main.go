@@ -100,7 +100,7 @@ func buildDashboard(handlers []handlerInfo) map[string]any {
 	panels = append(panels,
 		statPanel(1, "Requests / second", 0, 0, "reqps", fmt.Sprintf(`sum(rate(http_server_requests_total{%s}[$__rate_interval]))`, filters)),
 		statPanel(2, "p95 latency", 8, 0, "s", fmt.Sprintf(`histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{%s}[$__rate_interval])))`, filters)),
-		statPanel(3, "4xx + 5xx responses", 16, 0, "short", fmt.Sprintf(`sum(increase(http_server_requests_total{%s,status_code=~"4..|5.."}[$__rate_interval])) or vector(0)`, filters)),
+		statPanel(3, "4xx + 5xx responses", 16, 0, "short", fmt.Sprintf(`sum(increase(http_server_requests_total{%s,status_code=~"4..|5.."}[$__range])) or vector(0)`, filters)),
 		errorTablePanel(4, 0, 5, filters),
 	)
 	for handlerIndex, handler := range handlers {
@@ -165,17 +165,19 @@ func panel(id int, title string, x, y int, unit string, targets []map[string]any
 }
 
 func statPanel(id int, title string, x, y int, unit, query string) map[string]any {
+	target := queryTarget("A", query, title)
+	target["instant"] = true
 	return map[string]any{
 		"id": id, "title": title, "type": "stat", "datasource": prometheusDatasource(),
 		"gridPos":     map[string]int{"h": 5, "w": 8, "x": x, "y": y},
-		"targets":     []map[string]any{queryTarget("A", query, title)},
+		"targets":     []map[string]any{target},
 		"fieldConfig": map[string]any{"defaults": map[string]any{"unit": unit, "color": map[string]any{"mode": "palette-classic"}}, "overrides": []any{}},
 		"options":     map[string]any{"reduceOptions": map[string]any{"calcs": []string{"lastNotNull"}, "fields": "", "values": false}, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "area", "justifyMode": "auto"},
 	}
 }
 
 func errorTablePanel(id, x, y int, filters string) map[string]any {
-	query := fmt.Sprintf(`sum by (handler, status_code) (increase(http_server_requests_total{%s,status_code=~"4..|5.."}[$__rate_interval]))`, filters)
+	query := fmt.Sprintf(`sum by (handler, status_code) (increase(http_server_requests_total{%s,status_code=~"4..|5.."}[$__range]))`, filters)
 	return map[string]any{
 		"id": id, "title": "Errors by route and status code", "type": "table", "datasource": prometheusDatasource(),
 		"description": "Число ответов 4xx и 5xx за выбранный интервал. Пустая таблица означает, что ошибок не было.",
